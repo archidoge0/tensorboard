@@ -1,0 +1,73 @@
+name: GHAV TensorBoard 4480 lint-rust cache key
+on:
+  push:
+    branches: ['codex/ghav-tensorboard4480-lint-*']
+permissions:
+  contents: read
+jobs:
+  lint-rust:
+    name: Full Rustfmt Clippy cargo-raze check
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout fixed historical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: d62a27d5a0b0b7a96596d47c47e2b02316d0adb0
+          persist-credentials: false
+      - name: Restore Cargo artifacts
+        id: cargo-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: |
+            tensorboard/data/server/target/
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ghav-tb4480-lint-v2-lint-rust-${{ runner.os }}-cargo-1.48.0-0.7.0-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
+      - name: Install historical Rust toolchain with lint components
+        run: |
+          rustup toolchain install 1.48.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.48.0
+          rustc --version
+          cargo --version
+          cargo fmt --version
+          cargo clippy --version
+      - name: Record fixed task context
+        run: |
+          echo "GHAV_SOURCE_SHA=$(git rev-parse HEAD)"
+          echo "GHAV_CARGO_LOCK_SHA=$(sha256sum tensorboard/data/server/Cargo.lock | cut -d ' ' -f1)"
+          echo "GHAV_RUSTC_VERSION=$(rustc --version | awk '{print $2}')"
+          echo "GHAV_CARGO_VERSION=$(cargo --version | awk '{print $2}')"
+          echo "GHAV_CACHE_HIT=${{ steps.cargo-cache.outputs.cache-hit }}"
+      - name: Build OpenSSL 1.1 compatibility dependency
+        run: |
+          curl --fail --location --silent --show-error https://www.openssl.org/source/openssl-1.1.1w.tar.gz -o "$RUNNER_TEMP/openssl-1.1.1w.tar.gz"
+          echo "cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8  $RUNNER_TEMP/openssl-1.1.1w.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/openssl-1.1.1w.tar.gz" -C "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP/openssl-1.1.1w"
+          ./config --prefix="$RUNNER_TEMP/openssl-1.1.1w-installed" no-shared
+          make -j2
+          make install_sw
+          echo "OPENSSL_DIR=$RUNNER_TEMP/openssl-1.1.1w-installed" >> "$GITHUB_ENV"
+          echo "OPENSSL_STATIC=1" >> "$GITHUB_ENV"
+          echo "GHAV_OPENSSL_SHA256=cf3098950cb4d853ad95c0841f1f9c6d3dc102dccfcacd521d93925208b76ac8"
+      - name: Install historical cargo-raze
+        run: cargo install cargo-raze --version 0.7.0 --locked
+      - name: Run Rustfmt
+        run: cd tensorboard/data/server/ && cargo fmt -- --check
+      - name: Run Clippy
+        run: cargo clippy --manifest-path tensorboard/data/server/Cargo.toml --all-targets
+      - name: Check cargo-raze freshness
+        run: |
+          rm -rf third_party/rust/
+          (cd tensorboard/data/server/ && cargo fetch && cargo raze)
+          git add .
+          git diff --staged --exit-code
+      - name: Record generated tree witness
+        run: |
+          echo "GHAV_STAGED_DIFF_LINES=$(git diff --staged --numstat | wc -l | tr -d ' ')"
+          echo "GHAV_CARGO_RAZE_VERSION=$(cargo raze --version)"
