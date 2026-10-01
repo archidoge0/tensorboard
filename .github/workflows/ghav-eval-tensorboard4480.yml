@@ -1,0 +1,76 @@
+name: GHAV TensorBoard 4480 Rust pip cache
+
+on:
+  push:
+    branches:
+      - 'codex/ghav-tensorboard4480-*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-data-server-pip:
+    name: Build Rust data server pip package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout fixed historical source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: d62a27d5a0b0b7a96596d47c47e2b02316d0adb0
+          persist-credentials: false
+
+      - name: Setup historical Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.8.20'
+          architecture: x64
+
+      - name: Install historical Rust toolchain
+        run: |
+          rustup toolchain install 1.48.0 --profile minimal
+          rustup default 1.48.0
+          rustc --version
+          cargo --version
+
+      - name: Install Python packaging deps
+        run: |
+          python -m pip install --upgrade pip==25.0.1
+          pip install \
+            -c ./tensorboard/pip_package/requirements.txt \
+            -c ./tensorboard/pip_package/requirements_dev.txt \
+            setuptools==75.3.4 wheel==0.45.1
+
+      - name: Record fixed task context
+        run: |
+          echo "GHAV_SOURCE_SHA=$(git rev-parse HEAD)"
+          echo "GHAV_CARGO_LOCK_SHA=$(sha256sum tensorboard/data/server/Cargo.lock | cut -d ' ' -f1)"
+          echo "GHAV_RUSTC_VERSION=$(rustc --version | awk '{print $2}')"
+          echo "GHAV_CARGO_VERSION=$(cargo --version | awk '{print $2}')"
+          echo "GHAV_PYTHON_VERSION=$(python --version | awk '{print $2}')"
+          echo "GHAV_PIP_VERSION=$(python -m pip --version | awk '{print $2}')"
+          echo "GHAV_SETUPTOOLS_VERSION=$(python -c 'import setuptools; print(setuptools.__version__)')"
+          echo "GHAV_WHEEL_VERSION=$(python -c 'import wheel; print(wheel.__version__)')"
+          echo "GHAV_CACHE_HIT=${{ steps.cargo-cache.outputs.cache-hit }}"
+
+      - name: Build
+        run: cd tensorboard/data/server/ && cargo build --release
+
+      - name: Test
+        run: cd tensorboard/data/server/ && cargo test --release
+
+      - name: Package
+        run: |
+          rm -rf /tmp/pip_package && mkdir /tmp/pip_package
+          python tensorboard/data/server/pip_package/build.py \
+            --server-binary tensorboard/data/server/target/release/rustboard \
+            --out-dir /tmp/pip_package \
+            ;
+          find /tmp/pip_package -maxdepth 1 -type f -printf '%f %s bytes\n'
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rustboard-ubuntu-22.04
+          path: /tmp/pip_package/*
+          if-no-files-found: error
